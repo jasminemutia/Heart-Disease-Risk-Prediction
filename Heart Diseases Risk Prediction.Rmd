@@ -1,0 +1,561 @@
+---
+title: "Heart Disease Risk Prediction"
+author: "Jasmine Mutia Alifa"
+date: '2022-07-11'
+output: html_document
+---
+
+**Link Video Penjelasan :** <https://youtu.be/fKa1mHW8hNs>
+
+## Load Data
+
+```{r}
+library(readr)
+library(ggplot2) 
+library(Hmisc)
+library(dplyr)
+library(ROCR)
+library(rpart)
+library(rpart.plot)
+library(caret)
+```
+
+```{r}
+path <- "D:/R/heartData.csv"
+heartdf <- read.csv(path)
+```
+
+## 1A. Exploratory Data Analysis
+
+```{r}
+dim(heartdf)
+```
+
+```{r}
+str(heartdf)
+```
+
+**EXPLANATION:**
+
+Dataset yang saya gunakan memiliki 918 baris dan 12 atribut. Selanjutnya, saya melihat data teratas dari dataset yang saya gunakan. Dapat dilihat, ada berbagai atribut pada dataset terdiri dari tipe data integer, character, dan numeric.
+
+```{r}
+heartdf$Sex <- as.factor(heartdf$Sex)
+heartdf$ExerciseAngina <- as.factor(heartdf$ExerciseAngina)
+heartdf$RestingECG <- as.factor(heartdf$RestingECG)
+heartdf$ChestPainType <- as.factor(heartdf$ChestPainType)
+heartdf$ST_Slope <- as.factor(heartdf$ST_Slope)
+heartdf$FastingBS <- as.factor(heartdf$FastingBS)
+heartdf$HeartDisease <- as.factor(heartdf$HeartDisease)
+```
+
+```{r}
+sapply(heartdf, class)
+```
+
+**EXPLANATION:**
+
+Ada beberapa atribut data yang memiliki tipe data character sebenarnya bersifat kategorik, selanjutnya saya mengubahnya menjadi factor. Lalu, saya mengecek kembali perubahan tipe data pada dataset yang saya gunakan, tipe data sudah berubah.
+
+```{r}
+colSums(is.na(heartdf))
+```
+
+**EXPLANATION:**
+
+Saya mencari nilai missing value pada dataset yang saya gunakan. Dapat dilihat, tidak ada missing value pada dataset.
+
+```{r}
+sapply(heartdf, function(x) length(unique(x)))
+```
+
+**EXPLANATION:**
+
+-   Saya mengecek data yang unik di tiap atribut pada dataset. Pada tipe data numeric, terdapat banyak data yang unik karena nilai angka di dalam nya berbeda - beda. Contohnya: variabel Age menunjukkan umur para pengidap penyakit jantung, tentunya tiap orang memiliki umur yang berbeda saat mengalami penyakit jantung.
+
+-   Sedangkan, pada tipe data factor hanya terdapat beberapa data yang unik, karena mewakilkan kategori yang ada dalam tiap atribut data. Contohnya: variabel HeartDisease, 2 kategori dalam HeartDisease menunjukkan seseorang mengalami penyakit jantung dan tidak sakit jantung.
+
+```{r}
+ThreeSigma <- function(x, t = 3){
+ mu <- mean(x, na.rm = TRUE)
+ sig <- sd(x, na.rm = TRUE)
+ if (sig == 0){
+ message("All non-missing x-values are identical")
+}
+ up <- mu + t * sig
+ down <- mu - t * sig
+ out <- list(up = up, down = down)
+ 
+ return(out)
+ }
+
+Hampel <- function(x, t = 3){
+ mu <- median(x, na.rm = TRUE)
+ sig <- mad(x, na.rm = TRUE)
+ if (sig == 0){
+ message("Hampel identifer implosion: MAD scale estimate is zero")
+ }
+ up <- mu + t * sig
+ down <- mu - t * sig
+ out <- list(up = up, down = down)
+ 
+ return(out)
+ }
+   
+BoxplotRule<- function(x, t = 1.5){
+ xL <- quantile(x, na.rm = TRUE, probs = 0.25, names = FALSE)
+ xU <- quantile(x, na.rm = TRUE, probs = 0.75, names = FALSE)
+ Q <- xU - xL
+ if (Q == 0){
+ message("Boxplot rule implosion: interquartile distance is zero")
+ }
+ up <- xU + t * Q
+ down <- xU - t * Q
+ out <- list(up = up, down = down)
+ 
+ return(out)
+}   
+
+ExtractDetails <- function(x, down, up){
+ outClass <- rep("N", length(x))
+ indexLo <- which(x < down)
+ indexHi <- which(x > up)
+ outClass[indexLo] <- "L"
+ outClass[indexHi] <- "U"
+ index <- union(indexLo, indexHi)
+ values <- x[index]
+ outClass <- outClass[index]
+ nOut <- length(index)
+ maxNom <- max(x[which(x <= up)])
+ minNom <- min(x[which(x >= down)])
+ outList <- list(nOut = nOut, lowLim = down,
+ upLim = up, minNom = minNom,
+ maxNom = maxNom, index = index,
+ values = values,
+ outClass = outClass)
+ 
+ return(outList)
+ }
+```
+
+```{r}
+FindOutliers <- function(x, t3 = 3, tH = 3, tb = 1.5){
+ threeLims <- ThreeSigma(x, t = t3)
+ HampLims <- Hampel(x, t = tH)
+ boxLims <- BoxplotRule(x, t = tb)
+
+ n <- length(x)
+ nMiss <- length(which(is.na(x)))
+
+ threeList <- ExtractDetails(x, threeLims$down, threeLims$up)
+ HampList <- ExtractDetails(x, HampLims$down, HampLims$up)
+ boxList <- ExtractDetails(x, boxLims$down, boxLims$up)
+
+ sumFrame <- data.frame(method = "ThreeSigma", n = n,
+ nMiss = nMiss, nOut = threeList$nOut,
+ lowLim = threeList$lowLim,
+ upLim = threeList$upLim,
+ minNom = threeList$minNom,
+ maxNom = threeList$maxNom)
+ upFrame <- data.frame(method = "Hampel", n = n,
+ nMiss = nMiss, nOut = HampList$nOut,
+ lowLim = HampList$lowLim,
+ upLim = HampList$upLim,
+ minNom = HampList$minNom,
+ maxNom = HampList$maxNom)
+ sumFrame <- rbind.data.frame(sumFrame, upFrame)
+ upFrame <- data.frame(method = "BoxplotRule", n = n,
+ nMiss = nMiss, nOut = boxList$nOut,
+ lowLim = boxList$lowLim,
+ upLim = boxList$upLim,
+ minNom = boxList$minNom,
+ maxNom = boxList$maxNom)
+ sumFrame <- rbind.data.frame(sumFrame, upFrame)
+
+ threeFrame <- data.frame(index = threeList$index,
+ values = threeList$values,
+ type = threeList$outClass)
+ HampFrame <- data.frame(index = HampList$index,
+ values = HampList$values,
+ type = HampList$outClass)
+ boxFrame <- data.frame(index = boxList$index,
+ values = boxList$values,
+ type = boxList$outClass)
+ outList <- list(summary = sumFrame, threeSigma = threeFrame,
+ Hampel = HampFrame, boxplotRule = boxFrame)
+ 
+ return(outList)
+}
+```
+
+```{r}
+outlier_oldpeak <- FindOutliers(heartdf$Oldpeak)
+outlier_oldpeak$summary
+```
+
+```{r}
+outlier_restBP <- FindOutliers(heartdf$RestingBP)
+outlier_restBP$summary
+```
+
+```{r}
+outlier_maxHR <- FindOutliers(heartdf$MaxHR)
+outlier_maxHR$summary
+```
+
+```{r}
+outlier_cholesterol <- FindOutliers(heartdf$Cholesterol)
+outlier_cholesterol$summary
+```
+
+```{r}
+outlier_Age <- FindOutliers(heartdf$Age)
+outlier_Age$summary
+```
+
+**EXPLANATION:**
+
+-   Saya mencari data outlier pada tiap variabel numeric menggunakan metode three sigma, hampel identifier, dan boxplot rule. Dari ketiga metode, saya memilih boxplot rule untuk menangani nilai outlier yang ditemukan pada tiap variabel karena menghasilkan data outlier paling banyak dari 2 metode lainnya.
+
+-   Dalam logistic regression, adanya outlier tidak terlalu berpengaruh terhadap model regresi. Tetapi, data outlier yang ekstrim dapat berpengaruh terhadap model regresi yang akan dibuat. Sehingga, banyak data outlier yang bernilai sekitar 10% dari total data tidak akan saya gunakan.
+
+```{r}
+NoOutlierDF <- subset(heartdf, heartdf$RestingBP < 170.000 & heartdf$RestingBP > 110.000)  
+NoOutlierDF <- subset(heartdf, heartdf$MaxHR < 210.0000 & heartdf$MaxHR > 102.0000)
+NoOutlierDF <- subset(heartdf, heartdf$Cholesterol < 407.6250 & heartdf$Cholesterol > 126.3750)
+NoOutlierDF <- subset(heartdf, heartdf$Age < 79.5000 & heartdf$Age > 40.5000)
+```
+
+```{r}
+dim(NoOutlierDF)
+```
+
+**EXPLANATION:**
+
+Saya mengambil data yang tidak mengandung outlier menggunakan function subset(). Range data yang saya gunakan menggunakan batas atas dan bawah dari perhitungan boxplot rule. Selanjutnya saya cek dimensi dari dataframe yang tidak mengandung outlier, data outlier sudah tidak termasuk dalam dataframe.
+
+### Univariate
+
+```{r}
+heartdf_numeric <- (NoOutlierDF[sapply(NoOutlierDF, is.numeric)])
+hist.data.frame(heartdf_numeric)
+```
+
+**EXPLANATION:**
+
+Saya melalukan visualisasi terhadap variabel yang bersifat numeric. Dari visualisasi diatas dapat disimpulkan :
+
+1.  Variabel `Age` (umur) tidak terdistribusi secara normal, visualisasinya tidak simetris.
+2.  Variabel `RestingBP` (tekanan darah istirahat) memiliki beberapa data yang rentangnya sangat jauh dari data lainnya, sehingga tidak terdistribusi secara normal.
+3.  Variabel `Cholesterol` (kolesterol) hampir terdistribusi secara normal, visualisasi mengarah ke bentuk bell curve walaupun tidak sempurna. Selain itu, masih ada beberapa pencilan data pada variabel `Cholesterol` membuat tidak sepenuhnya terdistribusi secara normal.
+4.  Variabel `MaxHR` (detak jantung maksimum) hampir terdistribusi secara normal, visualisasi hampir berbentuk bell curve tetapi adanya beberapa yang tidak simetris membuat visualisasi nya tidak sepenuhnya baik.
+5.  Variabel `Oldpeak` tidak terdistribusi secara normal, visualisasi tidak simetris. Selain itu, ada beberapa pencilan data pada variabel nya.
+
+```{r}
+heartdf_factor <- (NoOutlierDF[sapply(NoOutlierDF, is.factor)])
+hist.data.frame(heartdf_factor)
+```
+
+**EXPLANATION:**
+
+Saya melalukan visualisasi terhadap variabel yang bersifat categorical. Dari visualisasi diatas dapat disimpulkan :
+
+1.  Variabel `Sex` di dominasi oleh "Male" (pria) sebanyak lebih dari 600 orang. Sebagian lain terdiri dari "Female" (perempuan) kurang lebih 100 orang.
+2.  Variabel `ChestPainType` memiliki data terbanyak pada tipe nyeri dada "ASY" (lebih dari 400 orang). Selanjutnya, ada tipe nyeri dada "NAP" & "ATA" (sekitar 100 orang), serta tipe nyeri dada TA (kurang dari 100 orang) dengan jumlah paling sedikit.
+3.  Variabel `FastingBS` yaitu gula darah puasa (1 = tinggi, 0 = normal atau rendah) memiliki 2 kategori. Kategori tinggi (sebanyak 200 orang) dan selain tinggi (gula darah normal atau rendah) sebanyak kurang lebih 600 orang.
+4.  Variabel `RestingECG` yaitu elektrokardiogram istirahat dengan kategori ST (kelainan gelombang ST-T) & LVH (kemungkinan hipertrofi ventrikel kiri) kurang lebih 200 orang. Sedangkan data terbanyak dengan kategori normal sebanyak lebih dari 450 orang.
+5.  Variabel `ExerciseAngina`, yaitu penyakit angina akibat jantung beraktivitas lebih keras (seperti olahraga) dialami oleh kurang dari 360 orang. Sebagian besar lain tidak mengalami angina, lebih dari 460 orang.
+6.  Variabel `ST_Slope`, yaitu puncak kemiringan saat latihan ST, dengan kategori down (menurun) sebanyak kurang dari 100 orang, up (menanjak) sebanyak kurang lebih 300 orang, dan flat (datar) sebanyak lebih dari 400 orang.
+7.  Variabel `HeartDisease`, yaitu sakit jantung memiliki 2 kategori (1 = penderita sakit jantung, 0 = tidak sakit jantung). Orang yang mengalami penyakit jantung (sekitar 480 orang) lebih banyak dari yang tidak sakit jantung. Sedangkan yang tidak mengalami penyakit jantung kurang dari 360 orang.
+
+### Bivariate
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = Sex)) + 
+  geom_bar(position = "fill") + 
+  ylab("proportion")
+```
+
+**EXPLANATION:**
+
+Dari visualisasi yang saya lakukan, dapat disimpulkan penyakit jantung lebih banyak dialami oleh laki - laki.
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = ChestPainType)) +
+  geom_bar(position = "dodge")
+```
+
+**EXPLANATION:**
+
+Penderita penyakit jantung paling sering mengalami nyeri dada dengan tipe "ASY". Sedangkan orang yang tidak mengalami sakit jantung paling banyak mengalami nyeri dada dengan tipe "ATA".
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = FastingBS)) + 
+  geom_bar(position = "fill") + 
+  ylab("proportion")
+```
+
+**EXPLANATION:**
+
+Penderita penyakit jantung cenderung tidak memiliki gula darah puasa yang tinggi (1: gula darah puasa tinggi, 0: normal atau rendah). Gula darah puasa yang tinggi tidak terlalu berpengaruh terhadap penderita penyakit jantung.
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = RestingECG)) + 
+  geom_bar(position = "fill") + 
+  ylab("proportion")
+```
+
+**EXPLANATION:**
+
+Penderita penyakit jantung kebanyakan memiliki elektrokardiogram istirahat yang normal.
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = ExerciseAngina)) + 
+  geom_bar(position = "fill") + 
+  ylab("proportion")
+```
+
+**EXPLANATION:**
+
+Penderita penyakit jantung kebanyakan mengalami sakit angina yang disebabkan saat jantung sedang bekerja lebih keras. Sedangkan orang yang tidak mengalami penyakit jantung kebanyakan tidak mengalami sakit angina (nyeri di dada).
+
+```{r}
+ggplot(NoOutlierDF, aes(x = HeartDisease, fill = ST_Slope)) + 
+  geom_bar(position = "fill") + 
+  ylab("proportion")
+```
+
+**EXPLANATION:**
+
+Penderita penyakit jantung sebagian besar memiliki kemiringan yang datar (Flat) saat latihan ST.
+
+### Multivariate
+
+```{r}
+heartdf_numeric <- (NoOutlierDF[sapply(NoOutlierDF, is.numeric)])
+rcorr(as.matrix(heartdf_numeric), type = "spearman")
+```
+
+**EXPLANATION:**
+
+Untuk melihat berbagai keterkaitan antar variabel numeric saya menggunakan function rcorr(). Dapat dilihat hubungan terkuat ada pada variabel `Oldpeak` dengan `Age`.
+
+## 1B. Data Preparation
+
+```{r}
+DFTrain <- subset(NoOutlierDF, select = c(1, 2, 3, 5, 7, 8, 9, 10, 12))
+```
+
+**EXPLANATION:**
+
+Saya memilih kolom dari variabel yang akan saya gunakan sebagai training data. Saya tidak menggunakan variabel `RestingBP` (tekanan darah istirahat), `FastingBS` (gula darah puasa), dan `ST_Slope` (kemiringan saat latihan ST) karena pengaruhnya cukup rendah terhadap `HeartDisease`. Hal ini dapat dilihat dari korelasi variabelnya dengan `HeartDisease`.
+
+```{r}
+dim(DFTrain)
+```
+
+```{r}
+head(DFTrain)
+```
+
+```{r}
+colSums(is.na(DFTrain))
+```
+
+**EXPLANATION:**
+
+Saya mengecek dataframe dari training set yang saya buat. Terdapat 825 baris dan 9 atribut dengan tipe data factor dan numeric. Tidak ada missing value pada training set.
+
+### Split Data Into Training and Validation Set
+
+```{r}
+0.8 * 825
+```
+
+```{r}
+TrainingSet <- DFTrain[1:660,]
+ValidationSet <- DFTrain[661:825,]
+```
+
+**EXPLANATION:**
+
+Rasio pembagian data training dan validation set yang saya lakukan:
+
+\- 80% data untuk training set
+
+\- 30% data untuk validation set
+
+## 1C. Modelling
+
+Saya ingin membuat logistic regression model dengan menggunakan `HeartDisease` sebagai target variable.
+
+```{r}
+logistic_Fit1 <- glm(HeartDisease~.,family = binomial(link = "logit"), TrainingSet)
+summary(logistic_Fit1)
+```
+
+```{r}
+logistic_Fit2 <- glm(HeartDisease~ Sex + Cholesterol + ChestPainType + ExerciseAngina + Oldpeak, family = binomial(link = "logit"), TrainingSet)
+summary(logistic_Fit2)
+```
+
+**EXPLANATION:**
+
+Saya membuat 2 model, pertama `logistic_Fit1` dengan menggunakan semua atribut. Kemudian, saya membuat model `logistic_Fit2` dengan beberapa variabel yang memiliki P-value paling rendah dibandingkan variabel lainnya.
+
+```{r}
+ValidationSet
+```
+
+```{r}
+predict_Fit1 <- predict(logistic_Fit1, newdata = subset(ValidationSet, select = c(1, 2, 3, 4, 5, 6, 7, 8, 9)), type = "response")
+predict_Fit2 <- predict(logistic_Fit2, newdata = subset(ValidationSet, select = c(1, 2, 3, 4, 5, 6,7, 8, 9)), type = "response")
+```
+
+**EXPLANATION:**
+
+Saya ingin menguji model yang saya buat, yaitu `logistic_Fit1` dan `logistic_Fit2` terhadap validation set. Kemudian saya memilih kolom pada validation set sesuai model yang saya buat di dalam variabel `predictFit1`.
+
+```{r}
+evaluation_Fit1 <-  prediction(predict_Fit1, ValidationSet$HeartDisease)
+prf_Fit1 <- performance(evaluation_Fit1, measure = "tpr", x.measure = "fpr")
+plot(prf_Fit1)
+```
+
+```{r}
+evaluation_Fit2 <-  prediction(predict_Fit2, ValidationSet$HeartDisease)
+prf_Fit2 <- performance(evaluation_Fit2, measure = "tpr", x.measure = "fpr")
+plot(prf_Fit2)
+```
+
+**EXPLANATION:**
+
+Kurva ROC pada kedua model (Fit1 & Fit2) menunjukkan hasil yang baik. Lengkungan kurva terakhir (paling kanan) menunjukkan nilai diatas 0.8. Nilai tersebut tergolong baik, karena semakin mendekati 1.
+
+### Check AUC Score
+
+```{r}
+# check AUC score validation set
+auc1 <- performance(evaluation_Fit1, measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc1
+```
+
+```{r}
+# check AUC score training set
+predictFit1_train <- predict(logistic_Fit1, newdata = subset(TrainingSet, select = c(1, 2, 3, 4, 5, 6, 7, 8, 9)) ,type = "response")
+evaluation_Fit1 <-  prediction(predictFit1_train, TrainingSet$HeartDisease)
+
+auc1train <- performance(evaluation_Fit1, measure = "auc")
+auc1train <- auc1train@y.values[[1]]
+auc1train
+```
+
+**EXPLANATION:**
+
+Nilai AUC Score (Fit1) pada validation dan training set tidak terlalu jauh. Hal ini menandakan model yang dibuat tidak bias dan overfit.
+
+```{r}
+auc2 <- performance(evaluation_Fit2, measure = "auc")
+auc2 <- auc2@y.values[[1]]
+auc2
+```
+
+**EXPLANATION:**
+
+Nilai AUC Score pada Fit2 cukup baik, tetapi saya menggunakan model dengan nilai AUC score yang paling tinggi, yaitu Fit 1.
+
+## 2. Decision Tree
+
+```{r}
+training_DTree <- DFTrain[1:660,]
+validation_DTree <- DFTrain[661:825,]
+```
+
+**EXPLANATION:**
+
+Untuk decision tree, saya juga membagi data dengan perbandingan:
+
+\- 80% data untuk training set
+
+\- 20% data untuk validation set
+
+```{r}
+modelDTree <- rpart(HeartDisease~., data = training_DTree)
+modelDTree
+```
+
+```{r}
+rpart.plot(modelDTree)
+```
+
+**EXPLANATION:**
+
+Decision Tree dapat digunakan untuk memprediksi data baru yang belum memiliki label (keputusan akhir) caranya dengan menyesuaikan kriteria data sesuai branch yang ada pada Decision Tree. (Hasil akhir 1: memprediksi mengalami penyakit jantung, 0: memprediksi orang yang tidak mengalami penyakit jantung).
+
+### Important Variable
+
+```{r}
+modelDTree$variable.importance
+```
+
+**EXPLANATION:**
+
+Pada decision tree yang sudah dibuat, variabel `ChestPainType` (root) merupakan variable terpenting dalam tree. Karena nilainya paling besar dari variabel lainnya.
+
+```{r}
+predictionDTree <- predict(modelDTree, newdata = subset(validation_DTree, select = c(1, 2, 3, 4, 5, 6,7, 8, 9)), type = "class")
+```
+
+## Conclusion
+
+```{r}
+table(predictionDTree, validation_DTree$HeartDisease)
+```
+
+**EXPLANATION:**
+
+Tabel prediction diatas menunjukkan hasil:
+
+1.  true-negative sebanyak 77 (ada 77 orang yang diprediksi tidak sakit jantung dan benar tidak sakit jantung)
+2.  true-positive sebanyak 54 (ada 54 orang yang diprediksi sakit jantung dan benar sakit jantung)
+3.  false-negative sebanyak 10 (ada 10 orang yang diprediksi tidak sakit jantung tetapi sebenarnya sakit jantung / prediksi salah)
+4.  false-positive sebanyak 24 (ada 24 orang yang diprediksi sakit jantung tetapi sebenarnya tidak sakit jantung / prediksi salah)
+
+```{r}
+correct_clasif <- table(predictionDTree, validation_DTree$HeartDisease)
+sum(diag(correct_clasif))  #correct classification data
+```
+
+**EXPLANATION:**
+
+Ada 131 data yang hasil prediksinya benar.
+
+```{r}
+sum(correct_clasif) - sum(diag(correct_clasif)) #incorrecct classification data
+```
+
+**EXPLANATION:**
+
+Ada 34 data yang hasil prediksinya salah.
+
+## Evaluation
+
+```{r}
+# accuracy per category 
+accuracy <- diag(correct_clasif) / rowSums(correct_clasif) * 100
+accuracy
+```
+
+**EXPLANATION:**
+
+Nilai akurasi untuk memprediksi kategori penderita penyakit jantung sebesar 84%. Sedangkan, nilai akurasi untuk memprediksi orang yang tidak mengalami sakit jantung sebesar 76%.
+
+```{r}
+overallAccuracy <- sum(diag(correct_clasif)) / sum(correct_clasif) * 100
+overallAccuracy
+```
+
+**EXPLANATION:**
+
+Nilai akurasi keseluruhan decision tree adalah 79%. Menurut saya, nilai tersebut cukup baik karena akurasi cukup mendekati angka 100%.
