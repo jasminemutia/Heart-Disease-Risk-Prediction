@@ -8,7 +8,7 @@ The aim is to identify key variables associated with heart disease risk, making 
 
 ## Project Workflow
 1. Load Data
-We start by loading the dataset and necessary libraries, including ggplot2, dplyr, caret, and others.
+I start by loading the dataset and necessary libraries, including ggplot2, dplyr, caret, and others.
 The data is imported from heartData.csv, and an initial check is performed to ensure there are no missing values.
 The dataset consists of 918 observations and 12 variables.
 
